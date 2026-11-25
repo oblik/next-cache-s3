@@ -29,18 +29,18 @@ export function reviveBuffers<T>(obj: T): T {
   if (!obj || typeof obj !== 'object') return obj
 
   if (Array.isArray(obj)) {
-    // Deliberately widened to `any` because the mapped array is a different
+    // Deliberately cast back to `T` because the mapped array is a different
     // shape than `T`, but is still valid for `T` (Buffers replacing the
     // placeholder objects).
-    return obj.map(reviveBuffers) as any
+    return obj.map(reviveBuffers) as T
   }
 
   if ('type' in obj && obj.type === 'Buffer' && 'data' in obj) {
     if (typeof obj.data === 'string') {
-      return Buffer.from(obj.data, 'base64') as any
+      return Buffer.from(obj.data, 'base64') as T
     }
     if (Array.isArray(obj.data)) {
-      return Buffer.from(obj.data) as any
+      return Buffer.from(obj.data) as T
     }
   }
 

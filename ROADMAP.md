@@ -1,0 +1,93 @@
+# Roadmap
+
+Goal: a first npm prerelease that can replace an ISR `cacheHandler` in a production Next.js 16 app running several server instances.
+
+Milestones are ordered. Within a milestone, items are ordered by dependency. Each item is done when it has unit tests and `pnpm check` passes.
+
+## Decisions
+
+- **No ISR.** Only the `use cache` handler API. The target is apps whose routes are dynamic (`await connection()`) and cache through `use cache`.
+- **One tags manifest**, not per-tag objects: one fetch, one in-memory copy. Concurrent writers are handled with conditional writes (see 2.4).
+- **Explicit configuration.** The consumer writes the handler file and passes storage and options. The package reads no env vars except the debug flag.
+- **No runtime imports from `next/dist/...`**, only types. Vendored helpers note where Next has an equivalent.
+- **Sticky handlers are experimental** and not needed for the first trial.
+- **Tests:** unit tests on in-memory storage plus e2e against `next start` on `FsStorage`. MinIO and multi-instance e2e only if the trial shows a need.
+
+## 1. Package restructure
+
+1. pnpm workspace: `packages/next-cache-s3` (library) and `examples/basic` (the demo app, depending on `workspace:*`)
+2. Public API with explicit options:
+
+   ```js
+   // cache-handlers/default.mjs
+   import { createHandler, S3Storage, FsStorage } from 'next-cache-s3'
+
+   const storage = process.env.CACHE_S3_BUCKET
+     ? new S3Storage({ bucket: process.env.CACHE_S3_BUCKET, region: '...' })
+     : new FsStorage({ dir: '.next/cache/handler' })
+
+   export default createHandler({ name: 'default', storage, lruSize: 50e6 })
+   ```
+
+   - `buildId` defaults to reading `.next/BUILD_ID`, with an override option, since `process.cwd()/.next` is an assumption (custom `distDir`, `output: 'standalone'`)
+   - `S3Storage` accepts a key prefix and an optional preconfigured `S3Client`
+   - Tags manifest timings (`staleMs`, `expireMs`, `evictMs`) are options with production defaults; today's values are debug values
+   - Handlers sharing a storage must share one `TagsManager`; keep that guarantee without module-level `let` state
+
+3. Packaging: `exports` map, type declarations, `next` as a peer dependency, `@aws-sdk/client-s3` as a peer dependency, `vitest` moved to dev dependencies
+4. Replace `LRUCache` and `streamToBuffer` / `streamFromBuffer` from `next/dist/...` with in-package versions. Leave a comment that Next's `LRUCache` (`next/dist/server/lib/lru-cache`) is a drop-in alternative.
+5. Update `CLAUDE.md` and `.claude/settings.json` for the new layout
+
+## 2. Correctness
+
+Found by comparing `Handler.ts` to Next's built-in handler (`next/dist/server/lib/cache-handlers/default.js`). All are required before the trial.
+
+1. **Time-based expiry.** `get` never compares the entry's age to `revalidate`, so entries (in storage and in the LRU) live until a tag invalidates them. Mirror the built-in handler, including the `expire < 0` sentinel and not storing `expire === 0` entries.
+2. **`softTags` / `revalidatePath`.** `getExpiration` returns `0` and `get` ignores `softTags`, so `revalidatePath` does nothing. Implement `getExpiration` from the manifest like the built-in handler.
+3. **Tag eviction resurrects entries.** A tag is dropped from the manifest `evictMs` (10s) after it expires, after which entries created _before_ the expiry are valid again. Eviction has to outlive the longest possible entry lifetime; pick a safe default and document the constraint.
+4. **Manifest conditional writes.**
+   - `HandlerStorage.get` returns an ETag; `put` accepts `ifMatch`; `get` accepts `ifNoneMatch`
+   - On a failed precondition: re-read, merge per tag by taking the later timestamps, retry
+   - Background refresh uses `ifNoneMatch`, so an unchanged manifest costs a 304
+   - `FsStorage` emulates the same semantics
+   - `updateTags` applies changes to the manager's current manifest, not to the handler's `this.tags` snapshot, which can be stale
+5. **Fail open.**
+   - Storage and parse errors in `get` are a miss; errors in `set` are logged, not thrown
+   - A rejected `pendingEntry` must not make a concurrent `get` throw
+   - The scheduled manifest write has no `catch` (unhandled rejection)
+   - A rejected manifest fetch leaves `readPromise` set forever
+6. **Missing manifest refetched on every request.** `loadedAt` is only set when the manifest exists, so a fresh bucket causes a storage read per `refreshTags`.
+7. **Partial entries.** If the value stream errors, discard the entry: nothing in the LRU, nothing in storage.
+8. Storage growth: document an S3 lifecycle rule for the `build/` prefix, since entries of old builds are never deleted
+
+## 3. Tests
+
+1. In-memory `HandlerStorage` test double with ETag support and failure injection
+2. `Handler` unit tests: hit/miss, time-based expiry, expired vs. stale tags, soft tags, `get` during a pending `set`, partial stream, fail-open paths, LRU hit and eviction
+3. `TagsManager` unit tests:
+   - Fresh / stale / expired manifest paths
+   - A pre-existing stale tag in a loaded manifest takes effect without a local `updateTags`
+   - `revalidateTag` with several handlers registered writes the manifest once
+   - Conflict merge and retry
+   - Eviction never revives an entry
+4. E2E: build `examples/basic`, run `next start` on `FsStorage`, assert over HTTP: cached render, `revalidateTag` (stale-while-revalidate), `updateTag` (immediate), `revalidatePath`, entries surviving a server restart. Separate `pnpm check:e2e`, since it needs a build.
+
+## 4. Prerelease and trial
+
+1. README: installation, handler file, options, S3 permissions and lifecycle rule, limitations
+2. `LICENSE`, package metadata, publish `0.1.0-next.x` under the `next` dist-tag
+3. Trial in a real app:
+   - Enable `cacheComponents`, register `cacheHandlers`, remove `cacheHandler` and `cacheMaxMemorySize`
+   - Move route caching to `use cache` + `cacheTag`, and check that existing `revalidatePath` calls still invalidate
+   - Verify the handler file and package end up in the `output: 'standalone'` bundle
+   - Verify cross-instance invalidation on at least two server instances
+4. Feed anything hard to debug back here as tests (MinIO, multi-instance e2e)
+
+## Later
+
+- Sticky handlers: keys vary across build machines because the function ID part depends on `.next/cache`. Try `deploymentId`; otherwise key on arguments only.
+- Pluggable logger instead of `console.debug`
+- Brotli for the manifest
+- Store JSON-like values (starting with `0:{`) as text instead of a buffer, if it measurably compresses better
+- GitHub Actions running `pnpm check` and e2e
+- `CONTRIBUTING.md`, issue templates

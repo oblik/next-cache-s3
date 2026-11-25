@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm check)",
+      "Bash(pnpm typecheck)",
+      "Bash(pnpm lint:*)",
+      "Bash(pnpm test:*)",
+      "Bash(pnpm format:*)",
+      "Bash(pnpm build)",
+      "Bash(pnpm build:handler)",
+      "Bash(pnpm exec vitest run:*)",
+      "Bash(pnpm exec tsc:*)",
+      "Bash(pnpm exec prettier:*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/prettier.mjs"
+          }
+        ]
+      }
+    ]
+  }
+}

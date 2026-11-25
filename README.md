@@ -28,24 +28,6 @@ const nextConfig: NextConfig = {
   - Brotli compression
   - base64 encoding
 
-## TODO
+## Roadmap
 
-Must-haves:
-
-- `softTags` support
-- Fix sticky cache not always being sticky due to `.next/cache`
-  - Maybe fixable by passing [`deploymentId`](https://nextjs.org/docs/app/api-reference/directives/use-cache#cache-keys)
-  - If not, the function hash can also be removed and only the function args can be used as cache key
-- Discard partial entries, since according to the JSDoc of the `CacheEntry.value` type:
-  > The stream can error and deliver partial data. Each handler decides whether it keeps the partial entry or discards it.
-
-Optimizations:
-
-- Add ETag checking in S3 storage to avoid extra network overhead
-- Sniff the cache value and if starts with `0:{`, assume it's just a JSON response and serialize it not as a buffer, but as regular JSON, so it compresses better?
-
-Tests:
-
-- When the tags manifest loads, there's a pre-existing stale tag. The tags should get updated without explicitly getting mutated (revalidated) by the user code.
-- When `revalidateTag` is called and there are more than 1 cache handlers registered, the tags manifest should be updated just once, not one time per handler.
-- …and many more
+See [ROADMAP.md](ROADMAP.md).
