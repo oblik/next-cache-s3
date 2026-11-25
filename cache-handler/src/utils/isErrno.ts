@@ -3,10 +3,10 @@
  * e.g. `isErrno(error, 'ENOENT')`.
  */
 export function isErrno(
-	error: unknown,
-	code: string
+  error: unknown,
+  code: string
 ): error is NodeJS.ErrnoException {
-	return Boolean(
-		error && typeof error === 'object' && 'code' in error && error.code === code
-	)
+  return Boolean(
+    error && typeof error === 'object' && 'code' in error && error.code === code
+  )
 }

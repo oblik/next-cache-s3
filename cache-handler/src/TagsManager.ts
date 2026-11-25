@@ -1,22 +1,22 @@
-import type { HandlerStorage } from "./types";
-import { createLogger } from "./utils/debug";
+import type { HandlerStorage } from './types'
+import { createLogger } from './utils/debug'
 
 export interface TagsManifest {
   [tagName: string]: Readonly<{
     /** Timestamp at which the resource tagged with this tag becomes expired. */
-    expiresAt?: number;
+    expiresAt?: number
 
     /** Timestamp at which the resource tagged with this tag becomes stale. */
-    stalesAt?: number;
-  }>;
+    stalesAt?: number
+  }>
 }
 
 export class TagsManager {
-  protected log = createLogger("TagsManager");
+  protected log = createLogger('TagsManager')
 
-  protected manifest?: Readonly<TagsManifest>;
-  protected readPromise?: Promise<TagsManifest | undefined>;
-  protected loadedAt?: number;
+  protected manifest?: Readonly<TagsManifest>
+  protected readPromise?: Promise<TagsManifest | undefined>
+  protected loadedAt?: number
 
   constructor(
     protected storage: HandlerStorage,
@@ -28,75 +28,75 @@ export class TagsManager {
      * have probably triggered every revalidation necessary and can be removed,
      * to reduce the size of the manifest.
      */
-    protected evictMs: number,
+    protected evictMs: number
   ) {}
 
   async getTags() {
-    if (!this.manifest) return this.loadManifest();
+    if (!this.manifest) return this.loadManifest()
 
-    const now = Date.now();
+    const now = Date.now()
 
     // Manifest is fresh; directly return it.
     if (now < this.loadedAt! + this.staleMs) {
-      this.log?.("returning fresh manifest");
-      return this.manifest;
+      this.log?.('returning fresh manifest')
+      return this.manifest
     }
 
     // Manifest is stale; load it **in the background**.
     if (now < this.loadedAt! + this.expireMs) {
-      this.log?.("revalidating stale manifest");
-      this.loadManifest();
-      return this.manifest;
+      this.log?.('revalidating stale manifest')
+      this.loadManifest()
+      return this.manifest
     }
 
     // Manifest is expired.
-    return this.loadManifest();
+    return this.loadManifest()
   }
 
   async putTags(tags: TagsManifest) {
-    this.updateManifest(tags);
-    this.scheduleUpdate();
+    this.updateManifest(tags)
+    this.scheduleUpdate()
   }
 
   protected async loadManifest() {
-    if (this.readPromise) return this.readPromise;
+    if (this.readPromise) return this.readPromise
 
-    this.readPromise = this.fetchManifest();
-    const manifest = await this.readPromise;
-    if (manifest) this.updateManifest(manifest);
-    this.readPromise = undefined;
-    return this.manifest;
+    this.readPromise = this.fetchManifest()
+    const manifest = await this.readPromise
+    if (manifest) this.updateManifest(manifest)
+    this.readPromise = undefined
+    return this.manifest
   }
 
   /** @todo Add Brotli compression here as well? */
   protected async fetchManifest(): Promise<TagsManifest | undefined> {
-    this.log?.("fetching manifest");
-    const body = await this.storage.get("tags-manifest.json");
-    if (!body) return;
+    this.log?.('fetching manifest')
+    const body = await this.storage.get('tags-manifest.json')
+    if (!body) return
 
-    this.loadedAt = Date.now();
-    const jsonString = body.toString("utf-8");
-    return JSON.parse(jsonString);
+    this.loadedAt = Date.now()
+    const jsonString = body.toString('utf-8')
+    return JSON.parse(jsonString)
   }
 
   protected async updateManifest(tags: TagsManifest) {
-    const now = Date.now();
-    const newManifest = Object.assign({}, this.manifest || {}, tags);
-    let dirty = false;
+    const now = Date.now()
+    const newManifest = Object.assign({}, this.manifest || {}, tags)
+    let dirty = false
 
     for (const tagName in newManifest) {
-      const tag = newManifest[tagName];
-      const msSinceStaled = tag.stalesAt ? now - tag.stalesAt : Infinity;
-      const msSinceExpired = tag.expiresAt ? now - tag.expiresAt : Infinity;
+      const tag = newManifest[tagName]
+      const msSinceStaled = tag.stalesAt ? now - tag.stalesAt : Infinity
+      const msSinceExpired = tag.expiresAt ? now - tag.expiresAt : Infinity
       if (msSinceStaled >= this.evictMs && msSinceExpired >= this.evictMs) {
-        this.log?.(`evicting tag from manifest: ${tagName}`);
-        delete newManifest[tagName];
-        dirty = true;
+        this.log?.(`evicting tag from manifest: ${tagName}`)
+        delete newManifest[tagName]
+        dirty = true
       }
     }
 
-    this.manifest = newManifest;
-    if (dirty) this.scheduleUpdate();
+    this.manifest = newManifest
+    if (dirty) this.scheduleUpdate()
   }
 
   /**
@@ -107,22 +107,22 @@ export class TagsManager {
    */
   protected scheduleUpdate() {
     if (this.scheduledTimer) {
-      this.log?.("cancelling scheduled update");
-      clearTimeout(this.scheduledTimer);
+      this.log?.('cancelling scheduled update')
+      clearTimeout(this.scheduledTimer)
     }
 
-    this.log?.("scheduling update");
+    this.log?.('scheduling update')
 
     this.scheduledTimer = setTimeout(() => {
-      this.scheduledTimer = undefined;
+      this.scheduledTimer = undefined
 
-      const json = JSON.stringify(this.manifest);
-      const body = Buffer.from(json, "utf-8");
+      const json = JSON.stringify(this.manifest)
+      const body = Buffer.from(json, 'utf-8')
 
-      this.log?.("writing manifest");
-      this.storage.put("tags-manifest.json", body);
-    }, 0);
+      this.log?.('writing manifest')
+      this.storage.put('tags-manifest.json', body)
+    }, 0)
   }
 
-  protected scheduledTimer?: NodeJS.Timeout;
+  protected scheduledTimer?: NodeJS.Timeout
 }

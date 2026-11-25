@@ -13,10 +13,10 @@ A [`cacheHandlers`](https://nextjs.org/docs/app/api-reference/config/next-config
 ```ts
 const nextConfig: NextConfig = {
   cacheHandlers: {
-    default: require.resolve("./cache-handlers/default-handler.js"),
-    remote: require.resolve("./cache-handlers/remote-handler.js"),
+    default: require.resolve('./cache-handlers/default-handler.js'),
+    remote: require.resolve('./cache-handlers/remote-handler.js'),
   },
-};
+}
 ```
 
 ## Features

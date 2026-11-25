@@ -1,34 +1,34 @@
-import { getData } from "@/components/getData";
-import { getStickyData } from "@/components/getStickyData";
-import { revalidateTag, updateTag } from "next/cache";
-import { connection } from "next/server";
+import { getData } from '@/components/getData'
+import { getStickyData } from '@/components/getStickyData'
+import { revalidateTag, updateTag } from 'next/cache'
+import { connection } from 'next/server'
 
-export const instant = false;
+export const instant = false
 
-let renderCount = 0;
+let renderCount = 0
 
 export default async function Page() {
   // This forces Next to avoid trying to prerender anything further down the
   // tree. We need this because we made DB calls which wouldn't be possible from
   // a build server running in a different AWS account.
-  await connection();
-  return <Content />;
+  await connection()
+  return <Content />
 }
 
 async function Content() {
-  "use cache";
+  'use cache'
 
-  const renderId = ++renderCount;
-  console.log(`\n[Page] render #${renderId} 🟢`);
+  const renderId = ++renderCount
+  console.log(`\n[Page] render #${renderId} 🟢`)
 
-  const [data, stickyData] = await Promise.all([getData(), getStickyData()]);
+  const [data, stickyData] = await Promise.all([getData(), getStickyData()])
   const json = JSON.stringify(
     { renderedAt: new Date().toISOString(), data, stickyData },
     null,
-    2,
-  );
+    2
+  )
 
-  console.log(`[Page] render #${renderId} 🔴\n`);
+  console.log(`[Page] render #${renderId} 🔴\n`)
 
   return (
     <div>
@@ -36,8 +36,8 @@ async function Content() {
 
       <button
         onClick={async () => {
-          "use server";
-          console.log(await getData(Math.random().toString()));
+          'use server'
+          console.log(await getData(Math.random().toString()))
         }}
       >
         getData()
@@ -45,8 +45,8 @@ async function Content() {
 
       <button
         onClick={async () => {
-          "use server";
-          revalidateTag("my-tag", "minutes");
+          'use server'
+          revalidateTag('my-tag', 'minutes')
         }}
       >
         Revalidate
@@ -54,12 +54,12 @@ async function Content() {
 
       <button
         onClick={async () => {
-          "use server";
-          updateTag("my-tag");
+          'use server'
+          updateTag('my-tag')
         }}
       >
         Expire
       </button>
     </div>
-  );
+  )
 }
