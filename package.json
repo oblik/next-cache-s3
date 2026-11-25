@@ -7,7 +7,7 @@
     "prebuild": "pnpm build:handler",
     "build": "next build",
     "start": "next start",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "pnpm build:handler && tsc --noEmit",
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",

@@ -1,4 +1,3 @@
-// @ts-check
 import { createHandler } from './dist/createHandler.js'
 import { Handler } from './dist/Handler.js'
 
