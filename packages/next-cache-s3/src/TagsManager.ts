@@ -17,12 +17,13 @@ export interface TagsManagerOptions {
   /** How long a loaded manifest can be used at all, before a refresh blocks. */
   expireMs: number
   /**
-   * Time a tag is allowed to stay in the manifest after both its `expiresAt`
-   * and `stalesAt` have passed. Tags that have stayed for e.g. a few hours
-   * have probably triggered every revalidation necessary and can be removed,
-   * to reduce the size of the manifest.
+   * How long a tag stays in the manifest after both its `expiresAt` and
+   * `stalesAt` have passed, which keeps the manifest from growing forever.
+   * Entries older than this are a miss, since an entry created before its
+   * tag's expiry would otherwise become valid again once the tag is gone.
+   * `Infinity` keeps tags forever and never caps entries.
    */
-  evictMs: number
+  retentionMs: number
 }
 
 // Low, so that invalidations from other instances apply almost immediately. The
@@ -31,8 +32,13 @@ export interface TagsManagerOptions {
 export const defaultTagsManagerOptions: TagsManagerOptions = {
   staleMs: 500,
   expireMs: 1000,
-  evictMs: 24 * 60 * 60 * 1000,
+  retentionMs: 30 * 24 * 60 * 60 * 1000,
 }
+
+// Tags are evicted this long after `retentionMs`, while entries are capped at
+// exactly `retentionMs`. Otherwise an instance whose clock runs ahead could
+// evict a tag while another instance still serves an entry created before it.
+const EVICTION_MARGIN_MS = 60 * 1000
 
 export class TagsManager {
   protected log = createLogger('TagsManager')
@@ -45,6 +51,11 @@ export class TagsManager {
     protected storage: HandlerStorage,
     protected options: TagsManagerOptions
   ) {}
+
+  /** Entries older than this are a miss, see `retentionMs`. */
+  get maxEntryAgeMs() {
+    return this.options.retentionMs
+  }
 
   async getTags() {
     if (!this.manifest) return this.loadManifest()
@@ -97,16 +108,14 @@ export class TagsManager {
   protected async updateManifest(tags: TagsManifest) {
     const now = Date.now()
     const newManifest = Object.assign({}, this.manifest || {}, tags)
+    const evictAfterMs = this.options.retentionMs + EVICTION_MARGIN_MS
     let dirty = false
 
     for (const tagName in newManifest) {
       const tag = newManifest[tagName]
       const msSinceStaled = tag.stalesAt ? now - tag.stalesAt : Infinity
       const msSinceExpired = tag.expiresAt ? now - tag.expiresAt : Infinity
-      if (
-        msSinceStaled >= this.options.evictMs &&
-        msSinceExpired >= this.options.evictMs
-      ) {
+      if (msSinceStaled >= evictAfterMs && msSinceExpired >= evictAfterMs) {
         this.log?.(`evicting tag from manifest: ${tagName}`)
         delete newManifest[tagName]
         dirty = true

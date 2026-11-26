@@ -115,16 +115,6 @@ describe.each([
     expect(await read(reader)).toBeUndefined()
   })
 
-  it("keeps an entry with the default profile's expire for years", async () => {
-    await writer.set(
-      'key',
-      Promise.resolve(cacheEntry({ revalidate: 900, expire: INFINITE_CACHE }))
-    )
-    vi.advanceTimersByTime(5 * 365 * DAY)
-
-    expect(await read(reader)).toMatchObject({ value: 'value' })
-  })
-
   // A negative `expire` is how Next marks an entry as deleted, since the
   // handler interface has no `delete`. Next only does this in dev (its tiered
   // handler), but honoring it costs nothing and keeps us safe if wrapped.
@@ -274,5 +264,96 @@ describe('soft tags (getExpiration)', () => {
     await other.refreshTags()
 
     expect(await other.getExpiration(softTags)).toBe(revalidatedAt)
+  })
+})
+
+// Tags are evicted from the manifest `retentionMs` after they expire, so an
+// entry created before that expiry would become valid again. Capping entries
+// at the same age makes sure none is still around by then.
+describe('tags retention', () => {
+  const RETENTION = 7 * DAY
+  // Eviction waits a minute past the retention, to allow for clock skew.
+  const EVICTION = RETENTION + 60 * SECOND
+
+  function setup(retentionMs: number) {
+    const storage = new MemoryStorage()
+    const handler = createHandler({
+      name: 'default',
+      storage,
+      buildId: '1',
+      tags: { retentionMs },
+    })
+    return { storage, handler }
+  }
+
+  function manifest(storage: MemoryStorage) {
+    const body = storage.data.get('tags-manifest.json')
+    return body ? JSON.parse(body.toString('utf-8')) : undefined
+  }
+
+  const longLived = { revalidate: 900, expire: INFINITE_CACHE }
+
+  it('serves an entry up to the retention, whatever its expire', async () => {
+    const { handler } = setup(RETENTION)
+    await handler.set('key', Promise.resolve(cacheEntry(longLived)))
+    vi.advanceTimersByTime(RETENTION)
+
+    expect(await read(handler)).toMatchObject({ value: 'value' })
+  })
+
+  it('treats an entry older than the retention as missing', async () => {
+    const { handler } = setup(RETENTION)
+    await handler.set('key', Promise.resolve(cacheEntry(longLived)))
+    vi.advanceTimersByTime(RETENTION + 1)
+
+    expect(await read(handler)).toBeUndefined()
+  })
+
+  it('never lets an evicted tag revive an entry', async () => {
+    const { storage, handler } = setup(RETENTION)
+    await handler.refreshTags()
+    await handler.set(
+      'key',
+      Promise.resolve(cacheEntry({ ...longLived, tags: ['post'] }))
+    )
+    await handler.updateTags(['post'])
+    await handler.refreshTags()
+    expect(await read(handler)).toBeUndefined()
+
+    // Eviction happens when the manifest is next loaded, which the refresh
+    // does once the loaded copy is out of date.
+    vi.advanceTimersByTime(EVICTION)
+    await handler.refreshTags()
+    vi.advanceTimersByTime(0) // Runs the scheduled manifest write.
+
+    expect(manifest(storage)).not.toHaveProperty('post')
+    expect(await read(handler)).toBeUndefined()
+  })
+
+  it('keeps a tag until the retention and margin have passed', async () => {
+    const { storage, handler } = setup(RETENTION)
+    await handler.refreshTags()
+    await handler.updateTags(['post'])
+
+    vi.advanceTimersByTime(EVICTION - 1)
+    await handler.refreshTags()
+    vi.advanceTimersByTime(0)
+
+    expect(manifest(storage)).toHaveProperty('post')
+  })
+
+  // For sites with few tags, where the manifest never gets big.
+  it('keeps entries and tags forever with an infinite retention', async () => {
+    const { storage, handler } = setup(Infinity)
+    await handler.refreshTags()
+    await handler.updateTags(['other'])
+    await handler.set('key', Promise.resolve(cacheEntry(longLived)))
+
+    vi.advanceTimersByTime(5 * 365 * DAY)
+    await handler.refreshTags()
+    vi.advanceTimersByTime(0)
+
+    expect(await read(handler)).toMatchObject({ value: 'value' })
+    expect(manifest(storage)).toHaveProperty('other')
   })
 })

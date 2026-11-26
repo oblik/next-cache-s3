@@ -94,6 +94,13 @@ export class Handler implements CacheHandler {
       return undefined
     }
 
+    // An entry this old may have had a tag expire that has since been evicted
+    // from the manifest, so its tags can no longer tell whether it's valid.
+    if (Date.now() - entry.timestamp > this.tagsManager.maxEntryAgeMs) {
+      this.log?.(`get(${filename}): older than the tags retention`)
+      return undefined
+    }
+
     if (this.hasExpiredTags(entry.tags, entry.timestamp)) {
       this.log?.(`get(${filename}): had an expired tag`)
       return undefined
