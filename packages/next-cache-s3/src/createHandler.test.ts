@@ -4,16 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createHandler } from './createHandler.js'
-import type { HandlerStorage } from './types.js'
+import { MemoryStorage } from './testing/MemoryStorage.js'
 import { streamFromBuffer } from './utils/streams.js'
-
-class MemoryStorage implements HandlerStorage {
-  data = new Map<string, Buffer>()
-  put = vi.fn(async (key: string, body: Buffer) => {
-    this.data.set(key, body)
-  })
-  get = vi.fn(async (key: string) => this.data.get(key) ?? null)
-}
 
 function entry(): Promise<CacheEntry> {
   return Promise.resolve({

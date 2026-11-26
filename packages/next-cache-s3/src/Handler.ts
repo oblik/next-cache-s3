@@ -73,6 +73,25 @@ export class Handler implements CacheHandler {
       return undefined
     }
 
+    // Next marks entries as deleted this way, since the handler interface has
+    // no `delete`.
+    // @see https://github.com/vercel/next.js/blob/v16.3.4/packages/next/src/server/lib/cache-handlers/default.ts
+    if (entry.expire < 0) {
+      this.log?.(`get(${filename}): marked as deleted`)
+      return undefined
+    }
+
+    // Next's built-in handler treats an entry as missing once it's past
+    // `revalidate`, because it keeps entries in memory, where a stale one isn't
+    // worth holding on to. We wait until `expire` instead: our entries persist
+    // in storage, and when the `use cache` wrapper gets an entry past its
+    // `revalidate`, it serves it while regenerating it in the background. So
+    // readers get slightly stale data instead of waiting on a render.
+    if (Date.now() > entry.timestamp + entry.expire * 1000) {
+      this.log?.(`get(${filename}): expired`)
+      return undefined
+    }
+
     if (this.hasExpiredTags(entry.tags, entry.timestamp)) {
       this.log?.(`get(${filename}): had an expired tag`)
       return undefined
@@ -96,6 +115,9 @@ export class Handler implements CacheHandler {
     const pendingPromise = this.pendingSets.get(filename)
     if (pendingPromise) {
       const entry = await pendingPromise
+
+      // Not stored by `set`, so it's a miss like it would be after the set.
+      if (isDynamic(entry)) return undefined
 
       this.log?.(`findEntry(${filename}): copying from pending stream`)
       const [streamCopy, value] = entry.value.tee()
@@ -157,6 +179,11 @@ export class Handler implements CacheHandler {
 
     try {
       const entry = await pendingEntry
+
+      if (isDynamic(entry)) {
+        this.log?.(`set(${filename}): skipped dynamic entry`)
+        return
+      }
 
       /**
        * Like the Next.js implementation.
@@ -282,4 +309,13 @@ export class Handler implements CacheHandler {
 
     return false
   }
+}
+
+/**
+ * `cacheLife({ expire: 0 })`: the `use cache` wrapper regenerates these on every
+ * read instead of serving the stored copy, so storing them is a wasted write.
+ * @see https://github.com/vercel/next.js/blob/v16.3.4/packages/next/src/server/lib/cache-handlers/default.ts
+ */
+function isDynamic(entry: CacheEntry) {
+  return entry.expire === 0
 }

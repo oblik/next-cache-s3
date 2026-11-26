@@ -7,7 +7,7 @@ Milestones are ordered. Within a milestone, items are ordered by dependency. Eac
 ## Decisions
 
 - **No ISR.** Only the `use cache` handler API. The target is apps whose routes are dynamic (`await connection()`) and cache through `use cache`.
-- **One tags manifest**, not per-tag objects: one fetch, one in-memory copy. Concurrent writers are handled with conditional writes (see 2.4).
+- **One tags manifest**, not per-tag objects: one fetch, one in-memory copy. Concurrent writers are handled with conditional writes (see 2.3).
 - **Explicit configuration.** The consumer writes the handler file and passes storage and options. The package reads no env vars except the debug flag.
 - **No runtime imports from `next/dist/...`**, only types. Vendored helpers note where Next has an equivalent.
 - **Sticky handlers are experimental** and not needed for the first trial.
@@ -21,28 +21,27 @@ Done: pnpm workspace with `packages/next-cache-s3` and `examples/basic`, explici
 
 Found by comparing `Handler.ts` to Next's built-in handler (`next/dist/server/lib/cache-handlers/default.js`). All are required before the trial.
 
-1. **Time-based expiry.** `get` never compares the entry's age to `revalidate`, so entries (in storage and in the LRU) live until a tag invalidates them. Mirror the built-in handler, including the `expire < 0` sentinel and not storing `expire === 0` entries.
-2. **`softTags` / `revalidatePath`.** `getExpiration` returns `0` and `get` ignores `softTags`, so `revalidatePath` does nothing. Implement `getExpiration` from the manifest like the built-in handler.
-3. **Tag eviction resurrects entries.** A tag is dropped from the manifest `evictMs` (a placeholder default of 24h) after it expires, after which entries created _before_ the expiry are valid again. Eviction has to outlive the longest possible entry lifetime; pick a safe default and document the constraint.
-4. **Manifest conditional writes.**
+1. **`softTags` / `revalidatePath`.** `getExpiration` returns `0` and `get` ignores `softTags`, so `revalidatePath` does nothing. Implement `getExpiration` from the manifest like the built-in handler.
+2. **Tag eviction resurrects entries.** A tag is dropped from the manifest `evictMs` (a placeholder default of 24h) after it expires, after which entries created _before_ the expiry are valid again. Eviction has to outlive the longest possible entry lifetime; pick a safe default and document the constraint.
+3. **Manifest conditional writes.**
    - `HandlerStorage.get` returns an ETag; `put` accepts `ifMatch`; `get` accepts `ifNoneMatch`
    - On a failed precondition: re-read, merge per tag by taking the later timestamps, retry
    - Background refresh uses `ifNoneMatch`, so an unchanged manifest costs a 304
    - `FsStorage` emulates the same semantics
    - `updateTags` applies changes to the manager's current manifest, not to the handler's `this.tags` snapshot, which can be stale
-5. **Fail open.**
+4. **Fail open.**
    - Storage and parse errors in `get` are a miss; errors in `set` are logged, not thrown
    - A rejected `pendingEntry` must not make a concurrent `get` throw
    - The scheduled manifest write has no `catch` (unhandled rejection)
    - A rejected manifest fetch leaves `readPromise` set forever
-6. **Missing manifest refetched on every request.** `loadedAt` is only set when the manifest exists, so a fresh bucket causes a storage read per `refreshTags`.
-7. **Partial entries.** If the value stream errors, discard the entry: nothing in the LRU, nothing in storage.
-8. Storage growth: document an S3 lifecycle rule for the `build/` prefix, since entries of old builds are never deleted
+5. **Missing manifest refetched on every request.** `loadedAt` is only set when the manifest exists, so a fresh bucket causes a storage read per `refreshTags`.
+6. **Partial entries.** If the value stream errors, discard the entry: nothing in the LRU, nothing in storage.
+7. Storage growth: document an S3 lifecycle rule for the `build/` prefix, since entries of old builds are never deleted
 
 ## 3. Tests
 
-1. In-memory `HandlerStorage` test double with ETag support and failure injection
-2. `Handler` unit tests: hit/miss, time-based expiry, expired vs. stale tags, soft tags, `get` during a pending `set`, partial stream, fail-open paths, LRU hit and eviction
+1. In-memory `HandlerStorage` test double (`src/testing/MemoryStorage.ts`, exists): add ETag support and failure injection
+2. `Handler` unit tests: hit/miss, expired vs. stale tags, soft tags, `get` during a pending `set`, partial stream, fail-open paths, LRU hit and eviction
 3. `TagsManager` unit tests:
    - Fresh / stale / expired manifest paths
    - A pre-existing stale tag in a loaded manifest takes effect without a local `updateTags`
