@@ -1,0 +1,39 @@
+{
+  "name": "next-cache-s3",
+  "version": "0.0.0",
+  "description": "Next.js `use cache` handler backed by S3",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src",
+    "!src/**/*.test.ts"
+  ],
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepack": "pnpm build",
+    "typecheck": "pnpm build && tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "peerDependencies": {
+    "@aws-sdk/client-s3": "^3.0.0",
+    "next": "^16.0.0"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-s3": "3.926.0",
+    "@types/node": "25.3.0",
+    "next": "16.3.4",
+    "vitest": "5.0.0"
+  }
+}

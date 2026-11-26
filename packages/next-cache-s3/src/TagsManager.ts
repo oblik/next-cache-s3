@@ -1,5 +1,5 @@
-import type { HandlerStorage } from './types'
-import { createLogger } from './utils/debug'
+import type { HandlerStorage } from './types.js'
+import { createLogger } from './utils/debug.js'
 
 export interface TagsManifest {
   [tagName: string]: Readonly<{
@@ -11,6 +11,29 @@ export interface TagsManifest {
   }>
 }
 
+export interface TagsManagerOptions {
+  /** How long a loaded manifest is used before it's refreshed in the background. */
+  staleMs: number
+  /** How long a loaded manifest can be used at all, before a refresh blocks. */
+  expireMs: number
+  /**
+   * Time a tag is allowed to stay in the manifest after both its `expiresAt`
+   * and `stalesAt` have passed. Tags that have stayed for e.g. a few hours
+   * have probably triggered every revalidation necessary and can be removed,
+   * to reduce the size of the manifest.
+   */
+  evictMs: number
+}
+
+// Low, so that invalidations from other instances apply almost immediately. The
+// cost is a manifest read about every `staleMs` under traffic, and a blocking
+// read on the first request after `expireMs` without traffic.
+export const defaultTagsManagerOptions: TagsManagerOptions = {
+  staleMs: 500,
+  expireMs: 1000,
+  evictMs: 24 * 60 * 60 * 1000,
+}
+
 export class TagsManager {
   protected log = createLogger('TagsManager')
 
@@ -20,15 +43,7 @@ export class TagsManager {
 
   constructor(
     protected storage: HandlerStorage,
-    protected staleMs: number,
-    protected expireMs: number,
-    /**
-     * Time a tag is allowed to stay in the manifest after both its `expiresAt`
-     * and `stalesAt` have passed. Tags that have stayed for e.g. a few hours
-     * have probably triggered every revalidation necessary and can be removed,
-     * to reduce the size of the manifest.
-     */
-    protected evictMs: number
+    protected options: TagsManagerOptions
   ) {}
 
   async getTags() {
@@ -37,13 +52,13 @@ export class TagsManager {
     const now = Date.now()
 
     // Manifest is fresh; directly return it.
-    if (now < this.loadedAt! + this.staleMs) {
+    if (now < this.loadedAt! + this.options.staleMs) {
       this.log?.('returning fresh manifest')
       return this.manifest
     }
 
     // Manifest is stale; load it **in the background**.
-    if (now < this.loadedAt! + this.expireMs) {
+    if (now < this.loadedAt! + this.options.expireMs) {
       this.log?.('revalidating stale manifest')
       this.loadManifest()
       return this.manifest
@@ -88,7 +103,10 @@ export class TagsManager {
       const tag = newManifest[tagName]
       const msSinceStaled = tag.stalesAt ? now - tag.stalesAt : Infinity
       const msSinceExpired = tag.expiresAt ? now - tag.expiresAt : Infinity
-      if (msSinceStaled >= this.evictMs && msSinceExpired >= this.evictMs) {
+      if (
+        msSinceStaled >= this.options.evictMs &&
+        msSinceExpired >= this.options.evictMs
+      ) {
         this.log?.(`evicting tag from manifest: ${tagName}`)
         delete newManifest[tagName]
         dirty = true

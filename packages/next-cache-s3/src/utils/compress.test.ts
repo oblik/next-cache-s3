@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { compress, decode, decompress, encode } from './compress'
+import { compress, decode, decompress, encode } from './compress.js'
 
 it('round-trips a buffer through compress and decompress', async () => {
   const original = Buffer.from(JSON.stringify({ hello: 'world', n: 42 }))

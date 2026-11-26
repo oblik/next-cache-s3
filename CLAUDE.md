@@ -12,22 +12,28 @@ What's left to build, in order, is in [ROADMAP.md](ROADMAP.md). Check it before 
 
 ## Layout
 
-- `cache-handler/src` — the library
-  - `Handler.ts` — the `CacheHandler` implementation: LRU in front of storage, tag checks
-  - `TagsManager.ts` — the single shared tags manifest (`tags-manifest.json`), cached with stale-while-revalidate
-  - `createHandler.ts` — wires build ID, storage and tags manager, which are shared by all handlers in the process
-  - `S3Storage.ts`, `FsStorage.ts` — `HandlerStorage` backends; the filesystem one mimics S3 semantics
-- `cache-handler/*.mjs` — the handler entry files that `next.config.ts` points to
-  - They import from `cache-handler/dist`, which is gitignored and built with `pnpm build:handler`
+pnpm workspace:
+
+- `packages/next-cache-s3` — the library, published to npm as ESM with type declarations
+  - `src/index.ts` — the public API; anything not exported there is internal
+  - `src/Handler.ts` — the `CacheHandler` implementation: LRU in front of storage, tag checks
+  - `src/TagsManager.ts` — the single shared tags manifest (`tags-manifest.json`), cached with stale-while-revalidate
+  - `src/createHandler.ts` — resolves options and the build ID; handlers sharing a storage instance share one `TagsManager`
+  - `src/S3Storage.ts`, `src/FsStorage.ts` — `HandlerStorage` backends; the filesystem one mimics S3 semantics
+  - Relative imports need a `.js` extension (`module: nodenext`)
+- `examples/basic` — demo Next.js app for trying the handler by hand, depending on the library via `workspace:*`
+  - `cache-handlers/*.mjs` — the handler entry files that `next.config.ts` points to, importing `next-cache-s3`
+  - The library resolves to `packages/next-cache-s3/dist`, which is gitignored and built with `pnpm build:lib` (also on install and before `pnpm build`)
   - Next doesn't compile handlers, so rebuild after changing `src` or the app keeps running old code
-- `app`, `components` — demo Next.js app for trying the handler by hand
 
 ## Commands
 
+All from the repo root:
+
 - `pnpm check` — typecheck, lint, unit tests, format check. Run it before calling anything done.
 - `pnpm test` runs once; `pnpm test:watch` watches
-- `pnpm build && pnpm start` — the only way to exercise caching for real; `next dev` behaves differently
-- `NEXT_CACHE_S3_DEBUG=true` (see `.env.example`) turns on handler logs and artificial storage latency
+- `pnpm build && pnpm start` — builds and runs `examples/basic`; the only way to exercise caching for real, since `next dev` behaves differently
+- `NEXT_CACHE_S3_DEBUG=true` (see `examples/basic/.env.example`) turns on handler logs and artificial storage latency
 
 ## Conventions
 

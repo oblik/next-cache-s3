@@ -4,19 +4,21 @@ A [`cacheHandlers`](https://nextjs.org/docs/app/api-reference/config/next-config
 
 ## Setup
 
-1. Copy `.env.example` to `.env`
-2. `pnpm build && pnpm start`
-3. Play around at http://localhost:3000
+The library is in [`packages/next-cache-s3`](packages/next-cache-s3) and a demo app in [`examples/basic`](examples/basic).
 
-**Note:** The cache handler must be pre-built (the `prebuild` script in `package.json`) because it's not a part of Next.js's build process. As you can see in [the docs](https://nextjs.org/docs/app/api-reference/config/next-config-js/cacheHandlers#usage) it must be specified in the Next config with `require.resolve` pointing to a plain JS file:
+1. `pnpm install`
+2. Copy `examples/basic/.env.example` to `examples/basic/.env`
+3. `pnpm build && pnpm start`
+4. Play around at http://localhost:3000
 
-```ts
-const nextConfig: NextConfig = {
-  cacheHandlers: {
-    default: require.resolve('./cache-handlers/default-handler.js'),
-    remote: require.resolve('./cache-handlers/remote-handler.js'),
-  },
-}
+**Note:** Next doesn't compile cache handlers, so the library is pre-built (on install and before `pnpm build`). [As the docs say](https://nextjs.org/docs/app/api-reference/config/next-config-js/cacheHandlers#usage), the Next config points to plain JS files with `require.resolve`, which here import the library:
+
+```js
+// examples/basic/cache-handlers/default.mjs
+import { createHandler } from 'next-cache-s3'
+import { storage } from './storage.mjs'
+
+export default createHandler({ name: 'default', storage })
 ```
 
 ## Features

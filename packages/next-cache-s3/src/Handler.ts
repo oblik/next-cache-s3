@@ -2,23 +2,28 @@ import type {
   CacheEntry,
   CacheHandler,
   Timestamp,
-} from 'next/dist/server/lib/cache-handlers/types'
-import { LRUCache } from 'next/dist/server/lib/lru-cache'
-import {
-  streamFromBuffer,
-  streamToBuffer,
-} from 'next/dist/server/stream-utils/node-web-streams-helper'
+} from 'next/dist/server/lib/cache-handlers/types.js'
 import { createHash } from 'node:crypto'
-import type { TagsManager, TagsManifest } from './TagsManager'
-import type { HandlerStorage } from './types'
-import { decode, encode } from './utils/compress'
-import { createLogger, type Logger } from './utils/debug'
-import { replaceBuffers, reviveBuffers } from './utils/reviveBuffers'
+import type { TagsManager, TagsManifest } from './TagsManager.js'
+import type { HandlerStorage } from './types.js'
+import { decode, encode } from './utils/compress.js'
+import { createLogger, type Logger } from './utils/debug.js'
+import { LRUCache } from './utils/LRUCache.js'
+import { replaceBuffers, reviveBuffers } from './utils/reviveBuffers.js'
+import { streamFromBuffer, streamToBuffer } from './utils/streams.js'
 
 type LRUCacheEntry = {
   entry: Omit<CacheEntry, 'value'>
   value: Buffer
   size: number
+}
+
+export interface HandlerOptions {
+  name: string
+  lruSize: number
+  sticky: boolean
+  compress: boolean
+  base64: boolean
 }
 
 export class Handler implements CacheHandler {
@@ -30,26 +35,18 @@ export class Handler implements CacheHandler {
     protected buildId: string,
     protected storage: HandlerStorage,
     protected tagsManager: TagsManager,
-    protected options: {
-      name: string
-      lruSize: number
-      sticky: boolean
-      compress: boolean
-      base64: boolean
-    }
+    protected options: HandlerOptions
   ) {
-    this.buildId = buildId
-    this.storage = storage
-    this.tagsManager = tagsManager
-    this.options = options
-
     this.log = createLogger(`Handler/${this.options.name}`)
 
     if (this.options.lruSize) {
       this.log?.(`creating LRU cache with size ${this.options.lruSize} bytes`)
       this.lruCache = new LRUCache(
         this.options.lruSize,
-        (v) => v.size,
+        // Like Next's built-in handler, which also keeps empty values from
+        // having a size of 0.
+        // @see https://github.com/vercel/next.js/blob/v16.3.4/packages/next/src/server/lib/cache-handlers/default.ts
+        (v, key) => v.size + key.length,
         this.log ? (k: string) => this.log?.(`LRU: ${k} evicted`) : undefined
       )
     }

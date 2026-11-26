@@ -3,8 +3,8 @@ import type { NextConfig } from 'next'
 const nextConfig: NextConfig = {
   cacheComponents: true,
   cacheHandlers: {
-    default: require.resolve('./cache-handler/default.mjs'),
-    sticky: require.resolve('./cache-handler/sticky.mjs'),
+    default: require.resolve('./cache-handlers/default.mjs'),
+    sticky: require.resolve('./cache-handlers/sticky.mjs'),
   },
 }
 

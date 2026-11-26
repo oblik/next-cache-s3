@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { replaceBuffers, reviveBuffers } from './reviveBuffers'
+import { replaceBuffers, reviveBuffers } from './reviveBuffers.js'
 
 it('leaves primitives as-is', () => {
   const result = reviveBuffers('foobar')

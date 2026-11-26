@@ -1,11 +1,16 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname, join, sep } from 'node:path'
-import type { HandlerStorage } from './types'
-import { createLogger, delay } from './utils/debug'
-import { isErrno } from './utils/isErrno'
+import { dirname, join, resolve, sep } from 'node:path'
+import type { HandlerStorage } from './types.js'
+import { createLogger, delay } from './utils/debug.js'
+import { isErrno } from './utils/isErrno.js'
 
 const TMP_SUFFIX = '.tmp'
+
+export interface FsStorageOptions {
+  /** Resolved against the current working directory. */
+  dir: string
+}
 
 /**
  * Filesystem implementation that should mimic the behaviors of S3 but locally,
@@ -14,7 +19,11 @@ const TMP_SUFFIX = '.tmp'
 export class FsStorage implements HandlerStorage {
   protected log = createLogger('FsStorage')
 
-  constructor(protected root: string) {}
+  protected root: string
+
+  constructor(options: FsStorageOptions) {
+    this.root = resolve(options.dir)
+  }
 
   /**
    * Resolves key segments to an absolute path, refusing anything that would

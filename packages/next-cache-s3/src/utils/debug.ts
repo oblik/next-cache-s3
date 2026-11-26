@@ -1,4 +1,4 @@
-import { IS_DEBUG } from './config'
+import { IS_DEBUG } from './config.js'
 
 /**
  * Inspired by a similar implementation in Next:

@@ -3,14 +3,14 @@ import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { FsStorage } from './FsStorage'
+import { FsStorage } from './FsStorage.js'
 
 let root: string
 let storage: FsStorage
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'cache-handler-fs-'))
-  storage = new FsStorage(root)
+  storage = new FsStorage({ dir: root })
 })
 
 afterEach(async () => {

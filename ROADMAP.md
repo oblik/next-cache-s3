@@ -15,28 +15,7 @@ Milestones are ordered. Within a milestone, items are ordered by dependency. Eac
 
 ## 1. Package restructure
 
-1. pnpm workspace: `packages/next-cache-s3` (library) and `examples/basic` (the demo app, depending on `workspace:*`)
-2. Public API with explicit options:
-
-   ```js
-   // cache-handlers/default.mjs
-   import { createHandler, S3Storage, FsStorage } from 'next-cache-s3'
-
-   const storage = process.env.CACHE_S3_BUCKET
-     ? new S3Storage({ bucket: process.env.CACHE_S3_BUCKET, region: '...' })
-     : new FsStorage({ dir: '.next/cache/handler' })
-
-   export default createHandler({ name: 'default', storage, lruSize: 50e6 })
-   ```
-
-   - `buildId` defaults to reading `.next/BUILD_ID`, with an override option, since `process.cwd()/.next` is an assumption (custom `distDir`, `output: 'standalone'`)
-   - `S3Storage` accepts a key prefix and an optional preconfigured `S3Client`
-   - Tags manifest timings (`staleMs`, `expireMs`, `evictMs`) are options with production defaults; today's values are debug values
-   - Handlers sharing a storage must share one `TagsManager`; keep that guarantee without module-level `let` state
-
-3. Packaging: `exports` map, type declarations, `next` as a peer dependency, `@aws-sdk/client-s3` as a peer dependency, `vitest` moved to dev dependencies
-4. Replace `LRUCache` and `streamToBuffer` / `streamFromBuffer` from `next/dist/...` with in-package versions. Leave a comment that Next's `LRUCache` (`next/dist/server/lib/lru-cache`) is a drop-in alternative.
-5. Update `CLAUDE.md` and `.claude/settings.json` for the new layout
+Done: pnpm workspace with `packages/next-cache-s3` and `examples/basic`, explicit options (`createHandler`, `S3Storage`, `FsStorage`), ESM build with declarations, peer dependencies, vendored `LRUCache` and stream helpers.
 
 ## 2. Correctness
 
@@ -44,7 +23,7 @@ Found by comparing `Handler.ts` to Next's built-in handler (`next/dist/server/li
 
 1. **Time-based expiry.** `get` never compares the entry's age to `revalidate`, so entries (in storage and in the LRU) live until a tag invalidates them. Mirror the built-in handler, including the `expire < 0` sentinel and not storing `expire === 0` entries.
 2. **`softTags` / `revalidatePath`.** `getExpiration` returns `0` and `get` ignores `softTags`, so `revalidatePath` does nothing. Implement `getExpiration` from the manifest like the built-in handler.
-3. **Tag eviction resurrects entries.** A tag is dropped from the manifest `evictMs` (10s) after it expires, after which entries created _before_ the expiry are valid again. Eviction has to outlive the longest possible entry lifetime; pick a safe default and document the constraint.
+3. **Tag eviction resurrects entries.** A tag is dropped from the manifest `evictMs` (a placeholder default of 24h) after it expires, after which entries created _before_ the expiry are valid again. Eviction has to outlive the longest possible entry lifetime; pick a safe default and document the constraint.
 4. **Manifest conditional writes.**
    - `HandlerStorage.get` returns an ETag; `put` accepts `ifMatch`; `get` accepts `ifNoneMatch`
    - On a failed precondition: re-read, merge per tag by taking the later timestamps, retry
@@ -76,6 +55,7 @@ Found by comparing `Handler.ts` to Next's built-in handler (`next/dist/server/li
 
 1. README: installation, handler file, options, S3 permissions and lifecycle rule, limitations
 2. `LICENSE`, package metadata, publish `0.1.0-next.x` under the `next` dist-tag
+   - The package ships `src` (minus tests) only so that the declaration and source maps in `dist` resolve. Decide whether that's worth it; otherwise drop `src` from `files` and turn off `declarationMap` / `sourceMap` in `tsconfig.build.json`
 3. Trial in a real app:
    - Enable `cacheComponents`, register `cacheHandlers`, remove `cacheHandler` and `cacheMaxMemorySize`
    - Move route caching to `use cache` + `cacheTag`, and check that existing `revalidatePath` calls still invalidate
