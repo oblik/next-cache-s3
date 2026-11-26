@@ -2,7 +2,7 @@
 
 A [`cacheHandlers`](https://nextjs.org/docs/app/api-reference/config/next-config-js/cacheHandlers) implementation for Next.js 16 `cacheComponents` / `use cache`, backed by S3 (filesystem locally).
 Meant to be published to npm as a project-agnostic package. It has to support dynamically rendered sites that run several server instances against one shared bucket.
-What's left to build, in order, is in [ROADMAP.md](ROADMAP.md). Check it before starting work and update it when an item is done or the plan changes.
+What's left to build, in order, is in [ROADMAP.md](ROADMAP.md). Check it before starting work and update it when the plan changes. It reflects only the current state: remove an item once it's done instead of marking it, since commits show what's done. Items are referenced by their bold name, not by number.
 
 ## Scope
 
