@@ -31,7 +31,7 @@ function cacheEntry({
 }
 
 async function read(handler: Handler, key = 'key') {
-  const entry = await handler.get(key, [])
+  const entry = await handler.get(key)
   if (!entry) return undefined
   const value = (await streamToBuffer(entry.value)).toString('utf-8')
   return { ...entry, value }
@@ -171,5 +171,108 @@ describe('dynamic entries (expire: 0)', () => {
     await setting
 
     expect(await getting).toBeUndefined()
+  })
+})
+
+// Next derives "soft" tags from the route of each request, and
+// `revalidatePath` expires them. Next then asks `getExpiration` when the
+// request's soft tags last expired, and discards entries created before that.
+describe('soft tags (getExpiration)', () => {
+  const softTags = ['_N_T_/layout', '_N_T_/blog/layout', '_N_T_/blog/hello']
+
+  let storage: MemoryStorage
+  let handler: Handler
+
+  beforeEach(async () => {
+    storage = new MemoryStorage()
+    handler = createHandler({ name: 'default', storage, buildId: '1' })
+    await handler.refreshTags()
+  })
+
+  async function revalidate(tags: string[], durations?: { expire?: number }) {
+    await handler.updateTags(tags, durations)
+    await handler.refreshTags()
+  }
+
+  it('is 0 when none of the tags were revalidated', async () => {
+    expect(await handler.getExpiration(softTags)).toBe(0)
+  })
+
+  it('is the time revalidatePath expired one of the tags', async () => {
+    const revalidatedAt = Date.now()
+    await revalidate(['_N_T_/blog/hello'])
+    vi.advanceTimersByTime(10 * SECOND)
+
+    expect(await handler.getExpiration(softTags)).toBe(revalidatedAt)
+  })
+
+  it('is the latest expiry among the tags', async () => {
+    await revalidate(['_N_T_/blog/hello'])
+    vi.advanceTimersByTime(10 * SECOND)
+    const latest = Date.now()
+    await revalidate(['_N_T_/layout'])
+    vi.advanceTimersByTime(10 * SECOND)
+
+    expect(await handler.getExpiration(softTags)).toBe(latest)
+  })
+
+  it('ignores tags of other paths', async () => {
+    await revalidate(['_N_T_/about'])
+
+    expect(await handler.getExpiration(softTags)).toBe(0)
+  })
+
+  // `getExpiration` can only report an expiry, so a stale-only tag has nothing
+  // to report, just like in Next's built-in handler.
+  it('ignores tags that were only marked stale', async () => {
+    await revalidate(['_N_T_/blog/hello'], {})
+
+    expect(await handler.getExpiration(softTags)).toBe(0)
+  })
+
+  // Returning the future expiry right away would make Next discard every entry
+  // regenerated before it, which turns off caching for the path until then.
+  it('ignores an expiry until it passes', async () => {
+    const revalidatedAt = Date.now()
+    await revalidate(['_N_T_/blog/hello'], { expire: 60 })
+
+    expect(await handler.getExpiration(softTags)).toBe(0)
+
+    vi.advanceTimersByTime(60 * SECOND)
+    expect(await handler.getExpiration(softTags)).toBe(
+      revalidatedAt + 60 * SECOND
+    )
+  })
+
+  // `handler` and `other` play two servers sharing one bucket, so a
+  // `revalidatePath` on one has to reach the other through the stored manifest.
+  it('sees a revalidatePath made by another instance sharing the bucket', async () => {
+    // Handlers created with the same storage object would share one manifest in
+    // memory and see each other's changes without going through storage. So
+    // `other` gets its own storage object over the same data, which gives it
+    // its own manifest, like a separate server would have.
+    const otherStorage = new MemoryStorage()
+    otherStorage.data = storage.data
+    const other = createHandler({
+      name: 'default',
+      storage: otherStorage,
+      buildId: '1',
+    })
+
+    // If the bucket had no manifest yet, `other` would have nothing loaded and
+    // would fetch on every refresh anyway. So it loads one first, and the test
+    // checks that it replaces that copy once it's out of date.
+    await revalidate(['unrelated'])
+    vi.advanceTimersByTime(0) // Runs the scheduled manifest write.
+    await other.refreshTags()
+
+    const revalidatedAt = Date.now()
+    await revalidate(['_N_T_/blog/hello'])
+    // Runs the scheduled write, and ages `other`'s copy past the manager's
+    // `expireMs`, so its next refresh refetches instead of using it.
+    vi.advanceTimersByTime(10 * SECOND)
+    await other.refreshTags()
+
+    expect(await other.getExpiration(softTags)).toBe(revalidatedAt)
   })
 })

@@ -21,7 +21,7 @@ Done: pnpm workspace with `packages/next-cache-s3` and `examples/basic`, explici
 
 Found by comparing `Handler.ts` to Next's built-in handler (`next/dist/server/lib/cache-handlers/default.js`). All are required before the trial.
 
-1. **`softTags` / `revalidatePath`.** `getExpiration` returns `0` and `get` ignores `softTags`, so `revalidatePath` does nothing. Implement `getExpiration` from the manifest like the built-in handler.
+1. Done: **`softTags` / `revalidatePath`.** `getExpiration` returns the latest past expiry of the soft tags from the manifest, and Next discards older entries itself.
 2. **Tag eviction resurrects entries.** A tag is dropped from the manifest `evictMs` (a placeholder default of 24h) after it expires, after which entries created _before_ the expiry are valid again. Eviction has to outlive the longest possible entry lifetime; pick a safe default and document the constraint.
 3. **Manifest conditional writes.**
    - `HandlerStorage.get` returns an ETag; `put` accepts `ifMatch`; `get` accepts `ifNoneMatch`
@@ -57,7 +57,7 @@ Found by comparing `Handler.ts` to Next's built-in handler (`next/dist/server/li
    - The package ships `src` (minus tests) only so that the declaration and source maps in `dist` resolve. Decide whether that's worth it; otherwise drop `src` from `files` and turn off `declarationMap` / `sourceMap` in `tsconfig.build.json`
 3. Trial in a real app:
    - Enable `cacheComponents`, register `cacheHandlers`, remove `cacheHandler` and `cacheMaxMemorySize`
-   - Move route caching to `use cache` + `cacheTag`, and check that existing `revalidatePath` calls still invalidate
+   - Move route caching to `use cache` + `cacheTag`, invalidate with `revalidateTag` / `updateTag`, and check that `revalidatePath` invalidates too
    - Verify the handler file and package end up in the `output: 'standalone'` bundle
    - Verify cross-instance invalidation on at least two server instances
 4. Feed anything hard to debug back here as tests (MinIO, multi-instance e2e)

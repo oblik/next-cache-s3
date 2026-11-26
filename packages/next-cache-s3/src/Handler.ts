@@ -59,12 +59,14 @@ export class Handler implements CacheHandler {
   }
 
   /**
-   * @todo Add `softTags` support.
+   * Leaves out the `softTags` parameter, which Next passes for handlers whose
+   * `getExpiration` returns `Infinity` to mean "I'll check soft tags in `get`".
+   * Ours returns a timestamp instead, so Next checks them itself. Checking
+   * them here like `entry.tags` would be the way to give soft tags
+   * stale-while-revalidate, at no extra storage reads since the manifest is in
+   * memory, but there's no point while `revalidatePath` never marks them stale.
    */
-  async get(
-    cacheKey: string,
-    softTags: string[]
-  ): Promise<undefined | CacheEntry> {
+  async get(cacheKey: string): Promise<undefined | CacheEntry> {
     const filename = this.keyToFilename(cacheKey)
 
     const entry = await this.findEntry(filename)
@@ -217,8 +219,38 @@ export class Handler implements CacheHandler {
     }
   }
 
+  /**
+   * Called with a request's soft tags, which `revalidatePath` expires. Next
+   * treats every entry created at or before the returned timestamp as a miss,
+   * so soft tags don't need checking in `get`. Since a single timestamp can
+   * only mean "expired" and not "stale", only `expiresAt` is returned, as in
+   * Next's built-in handler. That's enough, because `revalidatePath` sets
+   * `expiresAt` and never `stalesAt`.
+   * @see https://github.com/vercel/next.js/blob/v16.3.4/packages/next/src/server/lib/cache-handlers/default.ts
+   */
   async getExpiration(tags: string[]): Promise<Timestamp> {
-    return 0
+    const now = Date.now()
+    let expiration = 0
+
+    for (const tag of tags) {
+      const expiredAt = this.tags?.[tag]?.expiresAt
+      if (typeof expiredAt !== 'number') continue
+
+      // Next's built-in handler returns a future expiry as is, which turns off
+      // caching for the path until then: after `revalidateTag('_N_T_/blog', {
+      // expire: 60 })`, Next discards every entry older than 60s from now,
+      // so entries regenerated in the meantime are discarded too, and **every
+      // request re-renders**. To avoid this, we ignore the expiry until it
+      // passes, which is how `hasExpiredTags` and Next's own `areTagsExpired`
+      // treat regular tags.
+      // Only a manual `revalidateTag` like the above gets here, since
+      // `revalidatePath` always expires immediately.
+      if (expiredAt > now) continue
+
+      expiration = Math.max(expiration, expiredAt)
+    }
+
+    return expiration
   }
 
   async updateTags(
