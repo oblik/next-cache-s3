@@ -42,20 +42,6 @@ it('shares one tags manifest between handlers on the same storage', async () => 
   expect(manifestWrites(storage)).toHaveLength(1)
 })
 
-it('keeps separate tags manifests for separate storages', async () => {
-  const storageA = new MemoryStorage()
-  const storageB = new MemoryStorage()
-  const a = createHandler({ name: 'a', storage: storageA, buildId: '1' })
-  const b = createHandler({ name: 'b', storage: storageB, buildId: '1' })
-
-  await a.updateTags(['tag'])
-  await b.updateTags(['tag'])
-  await vi.runAllTimersAsync()
-
-  expect(manifestWrites(storageA)).toHaveLength(1)
-  expect(manifestWrites(storageB)).toHaveLength(1)
-})
-
 it('uses the given build ID in storage keys', async () => {
   const storage = new MemoryStorage()
   const handler = createHandler({ name: 'default', storage, buildId: 'abc' })

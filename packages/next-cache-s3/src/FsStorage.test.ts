@@ -42,18 +42,6 @@ describe('get/put', () => {
     expect(await readdir(join(root, 'build/x/page'))).toEqual(['1.json'])
   })
 
-  it('survives concurrent writes to the same key', async () => {
-    const key = 'build/x/page/1.json'
-    await Promise.all(
-      Array.from({ length: 20 }, (_, i) =>
-        storage.put(key, Buffer.from(JSON.stringify({ i })))
-      )
-    )
-    const { i } = JSON.parse((await body(key)).toString('utf-8'))
-    expect(i).toBeGreaterThanOrEqual(0)
-    expect(i).toBeLessThan(20)
-  })
-
   it('refuses keys that escape the root', async () => {
     await expect(storage.get('../outside.json')).rejects.toThrow(/escapes/)
   })

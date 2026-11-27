@@ -55,7 +55,14 @@ export class Handler implements CacheHandler {
   tags?: Readonly<TagsManifest>
 
   async refreshTags() {
-    this.tags = await this.tagsManager.getTags()
+    try {
+      this.tags = await this.tagsManager.getTags()
+    } catch (error) {
+      // Next rethrows handler errors and fails the request, so keep the last
+      // copy instead, or none: serving entries without tag checks beats
+      // turning every request into a render.
+      logError('failed to read tags manifest', error)
+    }
   }
 
   /**
@@ -69,7 +76,15 @@ export class Handler implements CacheHandler {
   async get(cacheKey: string): Promise<undefined | CacheEntry> {
     const filename = this.keyToFilename(cacheKey)
 
-    const entry = await this.findEntry(filename)
+    let entry: CacheEntry | undefined
+    try {
+      entry = await this.findEntry(filename)
+    } catch (error) {
+      // Next rethrows handler errors and fails the request, so it's a miss.
+      logError(`failed to read ${filename}`, error)
+      return undefined
+    }
+
     if (!entry) {
       this.log?.(`get(${filename}): not found anywhere`)
       return undefined
@@ -123,7 +138,9 @@ export class Handler implements CacheHandler {
   async findEntry(filename: string): Promise<CacheEntry | undefined> {
     const pendingPromise = this.pendingSets.get(filename)
     if (pendingPromise) {
-      const entry = await pendingPromise
+      // A failed render rejects the entry, which `set` doesn't store either.
+      const entry = await pendingPromise.catch(() => undefined)
+      if (!entry) return undefined
 
       // Not stored by `set`, so it's a miss like it would be after the set.
       if (isDynamic(entry)) return undefined
@@ -188,7 +205,14 @@ export class Handler implements CacheHandler {
     this.pendingSets.set(filename, pendingEntry)
 
     try {
-      const entry = await pendingEntry
+      let entry: CacheEntry
+      try {
+        entry = await pendingEntry
+      } catch (error) {
+        // The render failed, which Next reports itself.
+        this.log?.(`set(${filename}): entry rejected`, error)
+        return
+      }
 
       if (isDynamic(entry)) {
         this.log?.(`set(${filename}): skipped dynamic entry`)
@@ -221,6 +245,11 @@ export class Handler implements CacheHandler {
         : Buffer.from(json, 'utf-8')
 
       await this.storage.put(filename, body)
+    } catch (error) {
+      // A failed write only costs a regeneration later. Next's built-in handler
+      // swallows errors in `set` too.
+      // @see https://github.com/vercel/next.js/blob/v16.3.4/packages/next/src/server/lib/cache-handlers/default.ts
+      logError(`failed to write ${filename}`, error)
     } finally {
       this.pendingSets.delete(filename)
       this.log?.(`set(${filename}): deleted pending promise`)
@@ -238,6 +267,7 @@ export class Handler implements CacheHandler {
    */
   async getExpiration(tags: string[]): Promise<Timestamp> {
     const now = Date.now()
+
     let expiration = 0
 
     for (const tag of tags) {
@@ -331,6 +361,10 @@ export class Handler implements CacheHandler {
 
     return false
   }
+}
+
+function logError(message: string, error: unknown) {
+  console.error(`[next-cache-s3] ${message}:`, error)
 }
 
 /**

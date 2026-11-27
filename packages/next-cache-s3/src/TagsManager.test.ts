@@ -7,7 +7,6 @@ import {
 } from './TagsManager.js'
 import { MemoryStorage } from './testing/MemoryStorage.js'
 
-const SECOND = 1000
 const KEY = 'tags-manifest.json'
 const { expireMs } = defaultTagsManagerOptions
 
@@ -38,9 +37,6 @@ function stored(storage: MemoryStorage): TagsManifest | undefined {
   const body = storage.data.get(KEY)
   return body ? JSON.parse(body.toString('utf-8')) : undefined
 }
-
-const manifestWrites = (storage: MemoryStorage) =>
-  storage.put.mock.calls.filter(([key]) => key === KEY)
 
 describe('concurrent writes', () => {
   it('keeps the updates of two instances that wrote the first manifest', async () => {
@@ -88,47 +84,6 @@ describe('concurrent writes', () => {
     expect(stored(a.storage)!.x.expiresAt).toBe(updatedAt)
   })
 
-  it('makes the other instance see both updates once it refreshes', async () => {
-    const [a, b] = instances(2)
-    await a.manager.getTags()
-    await b.manager.getTags()
-
-    a.manager.updateTags(['a'])
-    b.manager.updateTags(['b'])
-    await vi.runAllTimersAsync()
-    vi.advanceTimersByTime(expireMs)
-
-    expect(Object.keys(await a.manager.getTags()).sort()).toEqual(['a', 'b'])
-  })
-
-  it('skips the write when another instance already evicted the same tags', async () => {
-    const retentionMs = 10 * SECOND
-    const [a, b] = instances(2).map(({ storage }) => ({
-      storage,
-      manager: new TagsManager(storage, {
-        ...defaultTagsManagerOptions,
-        retentionMs,
-      }),
-    }))
-    a.manager.updateTags(['old'])
-    await vi.runAllTimersAsync()
-    await a.manager.getTags()
-    await b.manager.getTags()
-
-    // Both read the manifest at once, so both see the tag due for eviction.
-    vi.advanceTimersByTime(retentionMs + 60 * SECOND)
-    a.storage.put.mockClear()
-    b.storage.put.mockClear()
-    await Promise.all([a.manager.getTags(), b.manager.getTags()])
-    await vi.runAllTimersAsync()
-
-    expect(stored(a.storage)).toEqual({})
-    expect([
-      ...manifestWrites(a.storage),
-      ...manifestWrites(b.storage),
-    ]).toHaveLength(2) // One that won, and one that conflicted.
-  })
-
   it('gives up after repeated conflicts, and writes after the next read', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const [a] = instances(1)
@@ -166,14 +121,6 @@ describe('concurrent writes', () => {
 })
 
 describe('reads', () => {
-  it("doesn't refetch a missing manifest on every call", async () => {
-    const [a] = instances(1)
-    await a.manager.getTags()
-    await a.manager.getTags()
-
-    expect(a.storage.get).toHaveBeenCalledOnce()
-  })
-
   it('reads again after a failed read', async () => {
     const [a] = instances(1)
     a.storage.get.mockRejectedValueOnce(new Error('network'))

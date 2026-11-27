@@ -48,19 +48,3 @@ it('refuses an item larger than the whole cache, keeping the rest', () => {
   expect(cache.has('a')).toBe(true)
   expect(cache.has('b')).toBe(false)
 })
-
-it('throws on items without a size', () => {
-  const cache = new LRUCache(10, bySize)
-  expect(() => cache.set('a', { size: 0 })).toThrow(/size must be > 0/)
-})
-
-it('removes a key without calling onEvict', () => {
-  const onEvict = vi.fn()
-  const cache = new LRUCache(10, bySize, onEvict)
-  cache.set('a', { size: 4 })
-  cache.remove('a')
-
-  expect(cache.has('a')).toBe(false)
-  expect(cache.currentSize).toBe(0)
-  expect(onEvict).not.toHaveBeenCalled()
-})

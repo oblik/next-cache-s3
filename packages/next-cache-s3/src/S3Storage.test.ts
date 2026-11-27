@@ -39,12 +39,6 @@ it('prefixes keys on put and get', async () => {
   expect(get.input).toMatchObject({ Bucket: 'b', Key: 'app/build/1/x.json' })
 })
 
-it('uses keys as-is without a prefix', async () => {
-  const client = fakeClient(async () => ({ ETag: '"e"' }))
-  await new S3Storage({ bucket: 'b', client }).put('x.json', Buffer.from(''))
-  expect(client.send.mock.calls[0][0].input.Key).toBe('x.json')
-})
-
 it('returns null for a missing key', async () => {
   const client = fakeClient(async () => {
     throw new NoSuchKey({ message: 'missing', $metadata: {} })

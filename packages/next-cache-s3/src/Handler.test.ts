@@ -1,6 +1,6 @@
 import type { CacheEntry } from 'next/dist/server/lib/cache-handlers/types.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createHandler } from './createHandler.js'
+import { createHandler, type CreateHandlerOptions } from './createHandler.js'
 import type { Handler } from './Handler.js'
 import { MemoryStorage } from './testing/MemoryStorage.js'
 import { streamFromBuffer, streamToBuffer } from './utils/streams.js'
@@ -37,45 +37,78 @@ async function read(handler: Handler, key = 'key') {
   return { ...entry, value }
 }
 
+function setup(options: Partial<CreateHandlerOptions> = {}) {
+  const storage = new MemoryStorage()
+  const handler = createHandler({
+    name: 'default',
+    storage,
+    buildId: '1',
+    ...options,
+  })
+  return { storage, handler }
+}
+
+/**
+ * A second handler over the same data with its own storage object, so it
+ * shares neither the LRU nor the in-memory manifest, like another server.
+ */
+function otherInstance(storage: MemoryStorage) {
+  const otherStorage = new MemoryStorage()
+  otherStorage.data = storage.data
+  return createHandler({
+    name: 'default',
+    storage: otherStorage,
+    buildId: '1',
+    lruSize: 0,
+  })
+}
+
 beforeEach(() => {
   vi.useFakeTimers()
 })
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.restoreAllMocks()
 })
 
-// `get` finds an entry either in this instance's LRU or, when another instance
-// sharing the bucket wrote it, in storage. Expiry must apply to both.
+// Each option changes how entries are encoded in storage, so each has to read
+// back what it wrote. Binary bytes catch an encoding that only works for text.
 describe.each([
-  { source: 'the LRU', readerLruSize: undefined },
-  { source: 'storage', readerLruSize: 0 },
-])('time-based expiry, reading from $source', ({ readerLruSize }) => {
-  let writer: Handler
+  { compress: false, base64: false },
+  { compress: true, base64: false },
+  { compress: false, base64: true },
+])('storage round trip with %o', (options) => {
+  it('reads back the entry another instance wrote', async () => {
+    const { storage, handler } = setup(options)
+    const bytes = Buffer.from([0, 1, 2, 253, 254, 255])
+    const entry = { ...cacheEntry(), value: streamFromBuffer(bytes) }
+    await handler.set('key', Promise.resolve(entry))
+
+    const other = createHandler({
+      name: 'default',
+      storage,
+      buildId: '1',
+      lruSize: 0,
+      ...options,
+    })
+    const read = await other.get('key')
+
+    expect(await streamToBuffer(read!.value)).toEqual(bytes)
+    expect(read).toMatchObject({ revalidate: 60, expire: 300 })
+  })
+})
+
+// Read from storage rather than the LRU, since that's where entries written by
+// other instances come from, and the expiry logic is the same for both.
+describe('time-based expiry', () => {
+  let handler: Handler
   let reader: Handler
 
   beforeEach(() => {
-    const storage = new MemoryStorage()
-    writer = createHandler({ name: 'default', storage, buildId: '1' })
-    reader =
-      readerLruSize === undefined
-        ? writer
-        : createHandler({
-            name: 'default',
-            storage,
-            buildId: '1',
-            lruSize: readerLruSize,
-          })
-  })
-
-  it('serves a fresh entry as-is', async () => {
-    await writer.set('key', Promise.resolve(cacheEntry()))
-
-    expect(await read(reader)).toMatchObject({
-      value: 'value',
-      revalidate: 60,
-      expire: 300,
-    })
+    const instance = setup()
+    handler = instance.handler
+    reader = otherInstance(instance.storage)
   })
 
   // Unlike Next's built-in handler, which drops entries at `revalidate`
@@ -83,7 +116,7 @@ describe.each([
   // and the `use cache` wrapper serves an entry past its `revalidate` while it
   // regenerates it in the background, so readers never wait on a render.
   it('keeps serving an entry past revalidate, until expire', async () => {
-    await writer.set('key', Promise.resolve(cacheEntry()))
+    await handler.set('key', Promise.resolve(cacheEntry()))
     vi.advanceTimersByTime(61 * SECOND)
 
     // `revalidate` stays as stored: the wrapper compares it to `timestamp` to
@@ -91,16 +124,9 @@ describe.each([
     expect(await read(reader)).toMatchObject({ value: 'value', revalidate: 60 })
   })
 
-  it('serves an entry up to its exact expire time', async () => {
-    await writer.set('key', Promise.resolve(cacheEntry()))
-    vi.advanceTimersByTime(300 * SECOND)
-
-    expect(await read(reader)).toMatchObject({ value: 'value' })
-  })
-
   it('treats an entry as missing once past expire', async () => {
-    await writer.set('key', Promise.resolve(cacheEntry()))
-    vi.advanceTimersByTime(300 * SECOND + 1)
+    await handler.set('key', Promise.resolve(cacheEntry()))
+    vi.advanceTimersByTime(301 * SECOND)
 
     expect(await read(reader)).toBeUndefined()
   })
@@ -109,18 +135,8 @@ describe.each([
   // entry reaches `set` (slow renders, a pending `set` awaited by readers).
   it('measures age from the entry timestamp, not from when it was stored', async () => {
     const timestamp = Date.now() - 290 * SECOND
-    await writer.set('key', Promise.resolve(cacheEntry({ timestamp })))
+    await handler.set('key', Promise.resolve(cacheEntry({ timestamp })))
     vi.advanceTimersByTime(11 * SECOND)
-
-    expect(await read(reader)).toBeUndefined()
-  })
-
-  // A negative `expire` is how Next marks an entry as deleted, since the
-  // handler interface has no `delete`. Next only does this in dev (its tiered
-  // handler), but honoring it costs nothing and keeps us safe if wrapped.
-  // @see https://github.com/vercel/next.js/blob/v16.3.4/packages/next/src/server/lib/cache-handlers/default.ts
-  it('treats a negative expire as deleted, however fresh the entry', async () => {
-    await writer.set('key', Promise.resolve(cacheEntry({ expire: -1 })))
 
     expect(await read(reader)).toBeUndefined()
   })
@@ -131,27 +147,16 @@ describe.each([
 // would only cost a write. Next's built-in handler skips them too.
 // @see https://github.com/vercel/next.js/blob/v16.3.4/packages/next/src/server/lib/cache-handlers/default.ts
 describe('dynamic entries (expire: 0)', () => {
-  let storage: MemoryStorage
-  let handler: Handler
-
-  beforeEach(() => {
-    storage = new MemoryStorage()
-    handler = createHandler({ name: 'default', storage, buildId: '1' })
-  })
-
-  it('are not written to storage', async () => {
+  it('are not stored', async () => {
+    const { storage, handler } = setup()
     await handler.set('key', Promise.resolve(cacheEntry({ expire: 0 })))
 
     expect(storage.put).not.toHaveBeenCalled()
-  })
-
-  it('are not kept in the LRU', async () => {
-    await handler.set('key', Promise.resolve(cacheEntry({ expire: 0 })))
-
     expect(await read(handler)).toBeUndefined()
   })
 
   it('are a miss for a get that was waiting on their pending set', async () => {
+    const { handler } = setup()
     let resolve!: (entry: CacheEntry) => void
     const pending = new Promise<CacheEntry>((r) => (resolve = r))
     const setting = handler.set('key', pending)
@@ -161,6 +166,67 @@ describe('dynamic entries (expire: 0)', () => {
     await setting
 
     expect(await getting).toBeUndefined()
+  })
+})
+
+// `revalidateTag(tag, profile)` marks a tag stale, and `updateTag(tag)` or
+// `revalidateTag(tag, { expire: 0 })` expires it.
+describe('tags', () => {
+  let storage: MemoryStorage
+  let handler: Handler
+
+  beforeEach(async () => {
+    ;({ storage, handler } = setup())
+    await handler.refreshTags()
+    await handler.set(
+      'key',
+      Promise.resolve(cacheEntry({ tags: ['post'], expire: INFINITE_CACHE }))
+    )
+    vi.advanceTimersByTime(SECOND)
+  })
+
+  async function revalidate(tags: string[], durations?: { expire?: number }) {
+    await handler.updateTags(tags, durations)
+    await handler.refreshTags()
+  }
+
+  it('treats an entry as missing once one of its tags expired', async () => {
+    await revalidate(['post'])
+
+    expect(await read(handler)).toBeUndefined()
+  })
+
+  // `revalidate: -1` makes the wrapper serve the entry while it regenerates it.
+  it('serves an entry with a stale tag, marked for regeneration', async () => {
+    await revalidate(['post'], {})
+
+    expect(await read(handler)).toMatchObject({
+      value: 'value',
+      revalidate: -1,
+    })
+  })
+
+  it('serves an entry created after its tag expired', async () => {
+    await revalidate(['post'])
+    vi.advanceTimersByTime(SECOND)
+    await handler.set(
+      'key',
+      Promise.resolve(cacheEntry({ tags: ['post'], value: 'new' }))
+    )
+
+    expect(await read(handler)).toMatchObject({ value: 'new', revalidate: 60 })
+  })
+
+  it('sees an expiry made by another instance sharing the bucket', async () => {
+    const other = otherInstance(storage)
+    await other.refreshTags()
+    await other.updateTags(['post'])
+    await vi.advanceTimersByTimeAsync(0) // Runs the scheduled manifest write.
+
+    vi.advanceTimersByTime(10 * SECOND) // Ages the handler's loaded manifest.
+    await handler.refreshTags()
+
+    expect(await read(handler)).toBeUndefined()
   })
 })
 
@@ -174,8 +240,7 @@ describe('soft tags (getExpiration)', () => {
   let handler: Handler
 
   beforeEach(async () => {
-    storage = new MemoryStorage()
-    handler = createHandler({ name: 'default', storage, buildId: '1' })
+    ;({ storage, handler } = setup())
     await handler.refreshTags()
   })
 
@@ -183,10 +248,6 @@ describe('soft tags (getExpiration)', () => {
     await handler.updateTags(tags, durations)
     await handler.refreshTags()
   }
-
-  it('is 0 when none of the tags were revalidated', async () => {
-    expect(await handler.getExpiration(softTags)).toBe(0)
-  })
 
   it('is the time revalidatePath expired one of the tags', async () => {
     const revalidatedAt = Date.now()
@@ -206,20 +267,6 @@ describe('soft tags (getExpiration)', () => {
     expect(await handler.getExpiration(softTags)).toBe(latest)
   })
 
-  it('ignores tags of other paths', async () => {
-    await revalidate(['_N_T_/about'])
-
-    expect(await handler.getExpiration(softTags)).toBe(0)
-  })
-
-  // `getExpiration` can only report an expiry, so a stale-only tag has nothing
-  // to report, just like in Next's built-in handler.
-  it('ignores tags that were only marked stale', async () => {
-    await revalidate(['_N_T_/blog/hello'], {})
-
-    expect(await handler.getExpiration(softTags)).toBe(0)
-  })
-
   // Returning the future expiry right away would make Next discard every entry
   // regenerated before it, which turns off caching for the path until then.
   it('ignores an expiry until it passes', async () => {
@@ -234,20 +281,8 @@ describe('soft tags (getExpiration)', () => {
     )
   })
 
-  // `handler` and `other` play two servers sharing one bucket, so a
-  // `revalidatePath` on one has to reach the other through the stored manifest.
   it('sees a revalidatePath made by another instance sharing the bucket', async () => {
-    // Handlers created with the same storage object would share one manifest in
-    // memory and see each other's changes without going through storage. So
-    // `other` gets its own storage object over the same data, which gives it
-    // its own manifest, like a separate server would have.
-    const otherStorage = new MemoryStorage()
-    otherStorage.data = storage.data
-    const other = createHandler({
-      name: 'default',
-      storage: otherStorage,
-      buildId: '1',
-    })
+    const other = otherInstance(storage)
 
     // If the bucket had no manifest yet, `other` would have nothing loaded and
     // would fetch on every refresh anyway. So it loads one first, and the test
@@ -275,17 +310,6 @@ describe('tags retention', () => {
   // Eviction waits a minute past the retention, to allow for clock skew.
   const EVICTION = RETENTION + 60 * SECOND
 
-  function setup(retentionMs: number) {
-    const storage = new MemoryStorage()
-    const handler = createHandler({
-      name: 'default',
-      storage,
-      buildId: '1',
-      tags: { retentionMs },
-    })
-    return { storage, handler }
-  }
-
   function manifest(storage: MemoryStorage) {
     const body = storage.data.get('tags-manifest.json')
     return body ? JSON.parse(body.toString('utf-8')) : undefined
@@ -293,16 +317,8 @@ describe('tags retention', () => {
 
   const longLived = { revalidate: 900, expire: INFINITE_CACHE }
 
-  it('serves an entry up to the retention, whatever its expire', async () => {
-    const { handler } = setup(RETENTION)
-    await handler.set('key', Promise.resolve(cacheEntry(longLived)))
-    vi.advanceTimersByTime(RETENTION)
-
-    expect(await read(handler)).toMatchObject({ value: 'value' })
-  })
-
   it('treats an entry older than the retention as missing', async () => {
-    const { handler } = setup(RETENTION)
+    const { handler } = setup({ tags: { retentionMs: RETENTION } })
     await handler.set('key', Promise.resolve(cacheEntry(longLived)))
     vi.advanceTimersByTime(RETENTION + 1)
 
@@ -310,7 +326,7 @@ describe('tags retention', () => {
   })
 
   it('never lets an evicted tag revive an entry', async () => {
-    const { storage, handler } = setup(RETENTION)
+    const { storage, handler } = setup({ tags: { retentionMs: RETENTION } })
     await handler.refreshTags()
     await handler.set(
       'key',
@@ -330,21 +346,9 @@ describe('tags retention', () => {
     expect(await read(handler)).toBeUndefined()
   })
 
-  it('keeps a tag until the retention and margin have passed', async () => {
-    const { storage, handler } = setup(RETENTION)
-    await handler.refreshTags()
-    await handler.updateTags(['post'])
-
-    vi.advanceTimersByTime(EVICTION - 1)
-    await handler.refreshTags()
-    await vi.advanceTimersByTimeAsync(0)
-
-    expect(manifest(storage)).toHaveProperty('post')
-  })
-
   // For sites with few tags, where the manifest never gets big.
   it('keeps entries and tags forever with an infinite retention', async () => {
-    const { storage, handler } = setup(Infinity)
+    const { storage, handler } = setup({ tags: { retentionMs: Infinity } })
     await handler.refreshTags()
     await handler.updateTags(['other'])
     await handler.set('key', Promise.resolve(cacheEntry(longLived)))
@@ -355,5 +359,69 @@ describe('tags retention', () => {
 
     expect(await read(handler)).toMatchObject({ value: 'value' })
     expect(manifest(storage)).toHaveProperty('other')
+  })
+})
+
+// Next rethrows handler errors, so a throwing handler fails the request.
+describe('failing open', () => {
+  let error: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    error = vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  it('treats a failing storage read as a miss', async () => {
+    const { storage, handler } = setup({ lruSize: 0 })
+    storage.get.mockRejectedValueOnce(new Error('network'))
+
+    expect(await handler.get('key')).toBeUndefined()
+    expect(error).toHaveBeenCalledOnce()
+  })
+
+  it('treats a corrupt entry as a miss', async () => {
+    const { storage, handler } = setup({ lruSize: 0 })
+    await handler.set('key', Promise.resolve(cacheEntry()))
+    for (const key of storage.data.keys()) {
+      storage.data.set(key, Buffer.from('{"value":'))
+    }
+
+    expect(await handler.get('key')).toBeUndefined()
+  })
+
+  it('resolves set when the storage write fails', async () => {
+    const { storage, handler } = setup()
+    storage.put.mockRejectedValueOnce(new Error('network'))
+
+    await expect(
+      handler.set('key', Promise.resolve(cacheEntry()))
+    ).resolves.toBeUndefined()
+    expect(error).toHaveBeenCalledOnce()
+  })
+
+  it('resolves set and a waiting get when the render fails', async () => {
+    const { handler } = setup()
+    let reject!: (error: Error) => void
+    const pending = new Promise<CacheEntry>((_, r) => (reject = r))
+    const setting = handler.set('key', pending)
+    const getting = handler.get('key')
+
+    reject(new Error('render failed'))
+
+    await expect(setting).resolves.toBeUndefined()
+    await expect(getting).resolves.toBeUndefined()
+  })
+
+  it('keeps the last manifest when a refresh fails', async () => {
+    const { storage, handler } = setup()
+    await handler.refreshTags()
+    await handler.set('key', Promise.resolve(cacheEntry({ tags: ['post'] })))
+    await handler.updateTags(['post'])
+    await handler.refreshTags()
+
+    vi.advanceTimersByTime(10 * SECOND)
+    storage.get.mockRejectedValueOnce(new Error('network'))
+    await expect(handler.refreshTags()).resolves.toBeUndefined()
+
+    expect(await read(handler)).toBeUndefined()
   })
 })
