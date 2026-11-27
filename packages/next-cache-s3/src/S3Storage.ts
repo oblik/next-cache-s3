@@ -4,7 +4,11 @@ import {
   S3Client,
   S3ServiceException,
 } from '@aws-sdk/client-s3'
-import type { HandlerStorage } from './types.js'
+import type {
+  HandlerStorage,
+  StorageObject,
+  StoragePutOptions,
+} from './types.js'
 import { createLogger } from './utils/debug.js'
 
 export interface S3StorageOptions {
@@ -21,8 +25,9 @@ export interface S3StorageOptions {
 }
 
 /**
- * Stores cache entries as objects in an S3 bucket.
- * @todo Add ETag support, to prevent unnecessary network overhead.
+ * Stores cache entries as objects in an S3 bucket. Conditional writes need
+ * `@aws-sdk/client-s3` 3.700.0 or later, since older versions silently drop
+ * `IfMatch` on `PutObject`.
  */
 export class S3Storage implements HandlerStorage {
   protected log = createLogger('S3Storage')
@@ -36,7 +41,7 @@ export class S3Storage implements HandlerStorage {
     this.client = options.client ?? new S3Client({ region: options.region })
   }
 
-  async get(key: string): Promise<Buffer | null> {
+  async get(key: string): Promise<StorageObject | null> {
     this.log?.(`get: ${key}`)
     const data = await this.client
       .send(
@@ -49,17 +54,38 @@ export class S3Storage implements HandlerStorage {
       })
 
     if (!data?.Body) return null
-    return Buffer.from(await data.Body.transformToByteArray())
+    const body = Buffer.from(await data.Body.transformToByteArray())
+    return { body, etag: data.ETag ?? '' }
   }
 
-  async put(key: string, body: Buffer): Promise<void> {
+  async put(
+    key: string,
+    body: Buffer,
+    options?: StoragePutOptions
+  ): Promise<{ etag: string } | 'precondition-failed'> {
     this.log?.(`put: ${key}`)
-    await this.client.send(
-      new PutObjectCommand({
-        Bucket: this.bucket,
-        Key: this.prefix + key,
-        Body: body,
+    const data = await this.client
+      .send(
+        new PutObjectCommand({
+          Bucket: this.bucket,
+          Key: this.prefix + key,
+          Body: body,
+          IfMatch: options?.ifMatch,
+          IfNoneMatch: options?.ifNoneMatch,
+        })
+      )
+      .catch((error) => {
+        if (!(error instanceof S3ServiceException)) throw error
+        // A 409 means another conditional write to the key was in flight, and
+        // is retried like a 412.
+        // @see https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html
+        const status = error.$metadata.httpStatusCode
+        if (status === 412 || status === 409)
+          return 'precondition-failed' as const
+        throw error
       })
-    )
+
+    if (data === 'precondition-failed') return data
+    return { etag: data.ETag ?? '' }
   }
 }

@@ -1,7 +1,11 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve, sep } from 'node:path'
-import type { HandlerStorage } from './types.js'
+import type {
+  HandlerStorage,
+  StorageObject,
+  StoragePutOptions,
+} from './types.js'
 import { createLogger, delay } from './utils/debug.js'
 import { isErrno } from './utils/isErrno.js'
 
@@ -37,27 +41,40 @@ export class FsStorage implements HandlerStorage {
     return result
   }
 
-  async get(key: string): Promise<Buffer | null> {
-    try {
-      const path = this.pathFor(key.split('/'))
-      this.log?.(`reading ${path}`)
-      await delay?.(150, 50, this.log)
-      return await readFile(path)
-    } catch (error) {
-      if (isErrno(error, 'ENOENT')) return null
-      throw error
-    }
+  async get(key: string): Promise<StorageObject | null> {
+    const path = this.pathFor(key.split('/'))
+    this.log?.(`reading ${path}`)
+    await delay?.(150, 50, this.log)
+    return readObject(path)
   }
 
   /**
    * Writes to a temporary file first and then renames it, so a concurrent
-   * `get` never observes a partially written entry.
+   * `get` never observes a partially written entry. Conditions aren't checked
+   * atomically with the write like on S3, which is fine for one process.
    */
-  async put(key: string, body: Buffer): Promise<void> {
+  async put(
+    key: string,
+    body: Buffer,
+    options?: StoragePutOptions
+  ): Promise<{ etag: string } | 'precondition-failed'> {
     const filepath = this.pathFor(key.split('/'))
-    const tmp = `${filepath}.${randomUUID()}${TMP_SUFFIX}`
+
+    if (options?.ifMatch || options?.ifNoneMatch) {
+      const current = await readObject(filepath)
+      const failed = options.ifNoneMatch
+        ? current !== null
+        : current?.etag !== options.ifMatch
+      if (failed) return 'precondition-failed'
+    }
 
     await mkdir(dirname(filepath), { recursive: true })
+    await this.write(filepath, body)
+    return { etag: etagOf(body) }
+  }
+
+  protected async write(filepath: string, body: Buffer) {
+    const tmp = `${filepath}.${randomUUID()}${TMP_SUFFIX}`
 
     try {
       this.log?.(`writing ${filepath}`)
@@ -69,4 +86,19 @@ export class FsStorage implements HandlerStorage {
       throw error
     }
   }
+}
+
+async function readObject(path: string): Promise<StorageObject | null> {
+  try {
+    const body = await readFile(path)
+    return { body, etag: etagOf(body) }
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return null
+    throw error
+  }
+}
+
+// Like S3's ETag for objects uploaded in one part, but only ever compared.
+function etagOf(body: Buffer) {
+  return `"${createHash('md5').update(body).digest('hex')}"`
 }

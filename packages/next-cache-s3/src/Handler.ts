@@ -146,11 +146,12 @@ export class Handler implements CacheHandler {
       }
     }
 
-    const body = await this.storage.get(filename)
-    if (!body) {
+    const object = await this.storage.get(filename)
+    if (!object) {
       this.log?.(`findEntry(${filename}): no file content`)
       return undefined
     }
+    const { body } = object
 
     const jsonString = this.options.compress
       ? await decode(body)
@@ -265,27 +266,9 @@ export class Handler implements CacheHandler {
     durations?: { expire?: number }
   ): Promise<void> {
     this.log?.('updateTags:', tags, durations)
-    const now = Date.now()
-    const tagsCopy = { ...this.tags }
-
-    for (const tag of tags) {
-      const existingEntry = tagsCopy[tag]
-      const newEntry = { ...existingEntry }
-
-      if (durations) {
-        newEntry.stalesAt = now
-
-        if (durations.expire !== undefined) {
-          newEntry.expiresAt = now + durations.expire * 1000
-        }
-      } else {
-        newEntry.expiresAt = now
-      }
-
-      tagsCopy[tag] = newEntry
-    }
-
-    await this.tagsManager.putTags(tagsCopy)
+    // Applied to the manager's manifest rather than to `this.tags`, which is
+    // only as recent as this handler's last `refreshTags`.
+    this.tagsManager.updateTags(tags, durations)
   }
 
   protected keyToFilename(cacheKey: string) {

@@ -253,7 +253,7 @@ describe('soft tags (getExpiration)', () => {
     // would fetch on every refresh anyway. So it loads one first, and the test
     // checks that it replaces that copy once it's out of date.
     await revalidate(['unrelated'])
-    vi.advanceTimersByTime(0) // Runs the scheduled manifest write.
+    await vi.advanceTimersByTimeAsync(0) // Runs the scheduled manifest write.
     await other.refreshTags()
 
     const revalidatedAt = Date.now()
@@ -324,7 +324,7 @@ describe('tags retention', () => {
     // does once the loaded copy is out of date.
     vi.advanceTimersByTime(EVICTION)
     await handler.refreshTags()
-    vi.advanceTimersByTime(0) // Runs the scheduled manifest write.
+    await vi.advanceTimersByTimeAsync(0) // Runs the scheduled manifest write.
 
     expect(manifest(storage)).not.toHaveProperty('post')
     expect(await read(handler)).toBeUndefined()
@@ -337,7 +337,7 @@ describe('tags retention', () => {
 
     vi.advanceTimersByTime(EVICTION - 1)
     await handler.refreshTags()
-    vi.advanceTimersByTime(0)
+    await vi.advanceTimersByTimeAsync(0)
 
     expect(manifest(storage)).toHaveProperty('post')
   })
@@ -351,7 +351,7 @@ describe('tags retention', () => {
 
     vi.advanceTimersByTime(5 * 365 * DAY)
     await handler.refreshTags()
-    vi.advanceTimersByTime(0)
+    await vi.advanceTimersByTimeAsync(0)
 
     expect(await read(handler)).toMatchObject({ value: 'value' })
     expect(manifest(storage)).toHaveProperty('other')
